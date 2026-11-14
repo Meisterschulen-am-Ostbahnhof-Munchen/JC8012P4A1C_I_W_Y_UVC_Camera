@@ -52,6 +52,9 @@ static const char *TAG = "uvc_demo";
 /* Preferred picture size: the largest MJPEG format the camera offers up to this size */
 #define PREFERRED_MAX_W 1280
 #define PREFERRED_MAX_H 720
+/* Upper limit for the requested frame rate: the display shows about 20 fps, and analog
+ * sources (PAL 25, AHD 25/30) have no more anyway. More only loads USB and CPU. */
+#define MAX_FPS 30
 
 /* MJPEG formats offered by the connected camera, best first (filled on connection) */
 #define MAX_CANDIDATES 32
@@ -230,6 +233,67 @@ static bool frame_callback(const uvc_host_frame_t *frame, void *user_ctx)
     return false; /* processing task returns it */
 }
 
+/* Frame interval (100 ns units) to request: the highest frame rate the camera offers for
+ * this format that does not exceed MAX_FPS; if every offered rate is higher, the lowest one.
+ * Only offered rates may be requested, the driver rejects anything else. */
+static uint32_t choose_interval(const uvc_host_frame_info_t *f)
+{
+    const uint32_t target = 10000000 / MAX_FPS;
+    if (f->interval_type == 0) {
+        /* continuous range: clamp to [min, max] and align to the step */
+        uint32_t iv = target;
+        if (iv < f->interval_min) {
+            iv = f->interval_min;
+        }
+        if (f->interval_step > 0 && iv > f->interval_min) {
+            iv = f->interval_min + (iv - f->interval_min + f->interval_step - 1) / f->interval_step * f->interval_step;
+        }
+        if (f->interval_max && iv > f->interval_max) {
+            iv = f->interval_max;
+        }
+        return iv ? iv : f->default_interval;
+    }
+    int count = f->interval_type < CONFIG_UVC_INTERVAL_ARRAY_SIZE ? f->interval_type : CONFIG_UVC_INTERVAL_ARRAY_SIZE;
+    uint32_t best_ok = 0;  /* smallest interval >= target, i.e. highest fps <= MAX_FPS */
+    uint32_t slowest = 0;  /* largest interval, used if all rates are above MAX_FPS */
+    for (int i = 0; i < count; i++) {
+        uint32_t iv = f->interval[i];
+        if (iv == 0) {
+            continue;
+        }
+        if (iv >= target && (best_ok == 0 || iv < best_ok)) {
+            best_ok = iv;
+        }
+        if (iv > slowest) {
+            slowest = iv;
+        }
+    }
+    if (best_ok) {
+        return best_ok;
+    }
+    return slowest ? slowest : f->default_interval;
+}
+
+static void frame_rates_str(const uvc_host_frame_info_t *f, char *out, size_t len)
+{
+    if (f->interval_type == 0) {
+        snprintf(out, len, "%.1f-%.1f fps", f->interval_max ? 1e7f / f->interval_max : 0.0f,
+                 f->interval_min ? 1e7f / f->interval_min : 0.0f);
+        return;
+    }
+    int count = f->interval_type < CONFIG_UVC_INTERVAL_ARRAY_SIZE ? f->interval_type : CONFIG_UVC_INTERVAL_ARRAY_SIZE;
+    size_t pos = 0;
+    out[0] = 0;
+    for (int i = 0; i < count && pos < len; i++) {
+        if (f->interval[i]) {
+            pos += snprintf(out + pos, len - pos, "%s%.1f", pos ? " " : "", 1e7f / f->interval[i]);
+        }
+    }
+    if (pos < len) {
+        snprintf(out + pos, len - pos, " fps");
+    }
+}
+
 /* Formats up to PREFERRED_MAX_* first (largest first), then larger ones (smallest first). */
 static int candidate_order(const void *a, const void *b)
 {
@@ -258,14 +322,16 @@ static void driver_event_callback(const uvc_host_driver_event_data_t *event, voi
     if (list && uvc_host_get_frame_list(event->device_connected.dev_addr, event->device_connected.uvc_stream_index,
                                         (uvc_host_frame_info_t (*)[])list, &n) == ESP_OK) {
         for (size_t i = 0; i < n; i++) {
-            ESP_LOGI(TAG, "  %-5s %4ux%-4u default %.1f fps",
+            char rates[96];
+            frame_rates_str(&list[i], rates, sizeof(rates));
+            ESP_LOGI(TAG, "  %-5s %4ux%-4u default %.1f fps, offers %s",
                      list[i].format == UVC_VS_FORMAT_MJPEG ? "MJPEG" :
                      list[i].format == UVC_VS_FORMAT_YUY2 ? "YUY2" : "other",
                      list[i].h_res, list[i].v_res,
-                     list[i].default_interval ? 1e7f / list[i].default_interval : 0.0f);
+                     list[i].default_interval ? 1e7f / list[i].default_interval : 0.0f, rates);
         }
-        /* Candidates: MJPEG up to the preferred size, largest first, at the camera's default
-         * frame rate; larger formats (up to MAX_FRAME_*) only as a last resort. */
+        /* Candidates: MJPEG up to the preferred size, largest first, at the highest offered
+         * frame rate up to MAX_FPS; larger formats (up to MAX_FRAME_*) only as a last resort. */
         int c = 0;
         for (size_t i = 0; i < n && c < MAX_CANDIDATES; i++) {
             const uvc_host_frame_info_t *f = &list[i];
@@ -275,7 +341,7 @@ static void driver_event_callback(const uvc_host_driver_event_data_t *event, voi
             s_cand[c++] = (uvc_host_stream_format_t) {
                 .h_res = f->h_res,
                 .v_res = f->v_res,
-                .fps = f->default_interval ? 1e7f / f->default_interval : 0,
+                .fps = 1e7f / choose_interval(f),
                 .format = UVC_VS_FORMAT_MJPEG,
             };
         }

@@ -20,9 +20,12 @@ C270 --USB 2.0 HS, isochron--> usb_host_uvc (MJPEG)
 - Die Kamera wird über die Komponente
   [`espressif/usb_host_uvc`](https://components.espressif.com/components/espressif/usb_host_uvc)
   angesprochen. Die Demo nimmt die Formatliste, die die Kamera beim Einstecken meldet, und
-  wählt das größte MJPEG-Format bis 1280x720 mit der Standard-Bildrate der Kamera. Lehnt
-  die Kamera ab, kommt das nächstkleinere Format dran; größere Formate bis 1280x960 nur als
-  letzte Wahl.
+  wählt das größte MJPEG-Format bis 1280x720. Lehnt die Kamera ab, kommt das nächstkleinere
+  Format dran; größere Formate bis 1280x960 nur als letzte Wahl.
+- Die Bildrate wird ebenfalls aus den Angaben der Kamera gewählt: die höchste angebotene
+  Rate bis `MAX_FPS` (30). Bietet die Kamera nur höhere an, die niedrigste davon; bei
+  stufenlos einstellbaren Kameras wird auf 30 begrenzt. Fest eingestellt ist nur die
+  Obergrenze, nicht die Rate selbst. Das Log zeigt pro Format die angebotenen Raten.
 - MJPEG ohne Huffman-Tabellen ist kein Problem: Der IDF-JPEG-Treiber setzt dann die
   Standard-Tabellen ein.
 - Es wird immer nur das neueste Bild angezeigt; ältere Bilder gehen sofort an den Treiber
@@ -76,7 +79,8 @@ die Differenz steht als „skipped (late)“ im Log. Vereinzelte `uvc-isoc: miss
 | Kamera | Übertragung | gewähltes Format | angezeigt |
 |---|---|---|---|
 | Logitech C270 | isochron | 1280x720 MJPEG | 16–20 fps |
-| UGREEN HDMI-zu-USB-Grabber (mit AHD-Kamera) | Bulk | 1280x720 MJPEG | 20 fps |
+| UGREEN HDMI-zu-USB-Grabber mit AHD-Kamera (720p25) | Bulk | 1280x720 MJPEG @ 30 (angeboten 60/50/30) | 20 fps |
+| UGREEN HDMI-zu-USB-Grabber mit PAL-Kamera über PAL-zu-HDMI-Wandler | Bulk | 1280x720 MJPEG @ 30 | 20 fps |
 | USB-Kameramodul mit ESP32, Platine „ESP32-USB-14A“ | – | 1280x720 MJPEG @ 15 | 14,6 fps (volle Kamerarate) |
 
 Das ESP32-Kameramodul bietet MJPEG 1280x720@15, 800x480@20, 640x480@25 und 480x320@25 an.
