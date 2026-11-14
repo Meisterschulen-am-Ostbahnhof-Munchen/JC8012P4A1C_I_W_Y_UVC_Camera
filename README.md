@@ -69,6 +69,30 @@ Warten auf den Bildwechsel laufen nacheinander), nicht beim USB: Die Kamera lief
 die Differenz steht als „skipped (late)“ im Log. Vereinzelte `uvc-isoc: missed EoF`
 (verlorene Isochron-Pakete) sind harmlos; das Bild wird dann verworfen.
 
+## AHD-Kamera über HDMI-Grabber
+
+Dieselbe Firmware zeigt auch eine analoge **AHD-Rückfahrkamera** an. Die Kette:
+
+```
+AHD-Kamera (720p25) → AHD-zu-HDMI-Wandler → UGREEN HDMI-zu-USB-Grabber → JC8012 (USB-HS)
+```
+
+Der Grabber meldet sich als UVC-Gerät (MJPEG bis 1920x1080) und streamt per **Bulk** in
+Nutzlastpaketen zu 16 KB. Angezeigt werden 1280x720 mit 20 fps.
+
+- **Korrigierter UVC-Treiber nötig:** `usb_host_uvc` 2.5.1 (und auch 2.6.0) entfernt bei
+  Bulk-Streams nur den ersten und letzten UVC-Header eines Bildes; die Header dazwischen
+  landen im JPEG, und der Hardware-Decoder meldet bei jedem Bild „marker parsed by the
+  decoder is not supported by the hardware“. Das Projekt nutzt deshalb eine korrigierte Kopie
+  in `components/usb_host_uvc` (siehe `README.espVT.md` dort). Gemeldet bei Espressif:
+  [esp-usb#651](https://github.com/espressif/esp-usb/issues/651).
+- **„Video Format Not Supported“ / „视频格式不支持“** auf dem Display kommt vom
+  AHD-zu-HDMI-Wandler: Er hat das Kameraformat nicht erkannt. Einmal aus- und wieder
+  einstecken genügte; danach blendet der Wandler kurz „AHD 720p@25“ ein. Analoge Kameras
+  gibt es als CVBS, AHD 720p/1080p, TVI und CVI; Kamera und Wandler müssen dasselbe Format
+  sprechen.
+- Ohne Signal am HDMI-Eingang zeigt der Grabber sein UGREEN-Logo.
+
 ## Anpassen
 
 In `main/main.c`:
@@ -85,9 +109,10 @@ In `main/main.c`:
 | `main/main.c` | Display-Init (MIPI-DSI/JD9365), UVC-Stream, JPEG-Decoder, PPA |
 | `main/jc8012_lcd_init.c` | JD9365-Init-Sequenz aus dem Hersteller-BSP (über espVT) |
 | `main/idf_component.yml` | Abhängigkeiten aus der ESP Component Registry |
+| `components/usb_host_uvc/` | `espressif/usb_host_uvc` 2.5.1 mit korrigiertem Bulk-Parser |
 | `sdkconfig.defaults` | ESP32-P4, PSRAM 200 MHz, 16 MB Flash, USB-Host-Einstellungen |
 
 ## Lizenz
 
-Apache-2.0, siehe [LICENSE](LICENSE). `main/jc8012_lcd_init.c` stammt von
-Espressif Systems (Apache-2.0).
+Apache-2.0, siehe [LICENSE](LICENSE). `main/jc8012_lcd_init.c` und
+`components/usb_host_uvc/` stammen von Espressif Systems (Apache-2.0).

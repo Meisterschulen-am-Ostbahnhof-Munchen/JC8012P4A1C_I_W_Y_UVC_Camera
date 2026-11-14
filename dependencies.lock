@@ -43,21 +43,18 @@ dependencies:
     - linux
     version: 1.5.0
   espressif/usb_host_uvc:
-    component_hash: 3dde9c89980212de1e394a29d3fe782a2988a08fd2a16af34eee6f642aab6ebe
     dependencies:
     - name: idf
-      require: private
       version: '>=5.0'
     - name: espressif/usb
-      registry_url: https://components.espressif.com
-      require: public
+      public: true
       rules:
       - if: idf_version >=6.0
       - if: target not in ["linux"]
       version: ^1.0.0
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: components/usb_host_uvc
+      type: local
     targets:
     - esp32s2
     - esp32s3
@@ -75,6 +72,6 @@ direct_dependencies:
 - espressif/usb
 - espressif/usb_host_uvc
 - idf
-manifest_hash: d72b42bd11d81434cc7d95de8779932e0a25e5915ba848769e05f596c1c0aee4
+manifest_hash: 4f71a7838245279f35754038c60711ab882e4e2f896aa76f3f86233431b9e583
 target: esp32p4
 version: 3.0.0
