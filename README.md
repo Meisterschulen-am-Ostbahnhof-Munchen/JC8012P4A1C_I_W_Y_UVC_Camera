@@ -19,8 +19,10 @@ C270 --USB 2.0 HS, isochron--> usb_host_uvc (MJPEG)
 
 - Die Kamera wird über die Komponente
   [`espressif/usb_host_uvc`](https://components.espressif.com/components/espressif/usb_host_uvc)
-  angesprochen. Die Demo probiert der Reihe nach 1280x720@30, 1280x720@10, 800x600@30,
-  640x480@30 und 640x480@15 (MJPEG), bis die Kamera ein Format annimmt.
+  angesprochen. Die Demo nimmt die Formatliste, die die Kamera beim Einstecken meldet, und
+  wählt das größte MJPEG-Format bis 1280x720 mit der Standard-Bildrate der Kamera. Lehnt
+  die Kamera ab, kommt das nächstkleinere Format dran; größere Formate bis 1280x960 nur als
+  letzte Wahl.
 - MJPEG ohne Huffman-Tabellen ist kein Problem: Der IDF-JPEG-Treiber setzt dann die
   Standard-Tabellen ein.
 - Es wird immer nur das neueste Bild angezeigt; ältere Bilder gehen sofort an den Treiber
@@ -33,7 +35,7 @@ C270 --USB 2.0 HS, isochron--> usb_host_uvc (MJPEG)
 | | |
 |---|---|
 | Board | Guition JC8012P4A1C_I_W_Y, „New Panel“ (V2/V3 auf dem Etikett), ESP32-P4 **ab Rev. v3.0** |
-| Kamera | Logitech C270 (USB-ID `046d:0825`), andere UVC-Kameras mit MJPEG sollten auch gehen |
+| Kamera | Logitech C270 (USB-ID `046d:0825`), andere UVC-Kameras mit MJPEG sollten auch gehen (siehe unten) |
 | Kamera-Anschluss | Type-C-Buchse **„High speed USB“** (USB3 im Schaltplan), USB-A-auf-C-OTG-Adapter |
 | Stromversorgung / Flashen | Type-C-Buchse **USB-TTL** (USB1, CH340C), Netzteil ≥ 1 A empfohlen |
 
@@ -69,6 +71,17 @@ Warten auf den Bildwechsel laufen nacheinander), nicht beim USB: Die Kamera lief
 die Differenz steht als „skipped (late)“ im Log. Vereinzelte `uvc-isoc: missed EoF`
 (verlorene Isochron-Pakete) sind harmlos; das Bild wird dann verworfen.
 
+## Getestete Kameras
+
+| Kamera | Übertragung | gewähltes Format | angezeigt |
+|---|---|---|---|
+| Logitech C270 | isochron | 1280x720 MJPEG | 16–20 fps |
+| UGREEN HDMI-zu-USB-Grabber (mit AHD-Kamera) | Bulk | 1280x720 MJPEG | 20 fps |
+| USB-Kameramodul mit ESP32, Platine „ESP32-USB-14A“ | – | 1280x720 MJPEG @ 15 | 14,6 fps (volle Kamerarate) |
+
+Das ESP32-Kameramodul bietet MJPEG 1280x720@15, 800x480@20, 640x480@25 und 480x320@25 an.
+Selten kommt von ihm ein fehlerhaftes JPEG; der Rahmen wird übersprungen.
+
 ## AHD-Kamera über HDMI-Grabber
 
 Dieselbe Firmware zeigt auch eine analoge **AHD-Rückfahrkamera** an. Die Kette:
@@ -100,7 +113,8 @@ In `main/main.c`:
 - **Farben vertauscht (rot/blau):** `JPEG_DEC_RGB_ELEMENT_ORDER_BGR` → `..._RGB`
 - **Bild steht auf dem Kopf:** `PPA_SRM_ROTATION_ANGLE_270` → `..._90`
 - **Spiegelbild (Selfie-Ansicht):** in `display_show()` `.mirror_x = true` setzen
-- **Andere Auflösung:** Liste `s_formats[]`; mit z. B. 960x544 sind höhere Bildraten möglich
+- **Andere Auflösung:** `PREFERRED_MAX_W/H` (Standard 1280x720); kleinere Formate wie
+  960x544 erlauben höhere Bildraten
 
 ## Dateien
 

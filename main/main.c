@@ -9,6 +9,7 @@
  */
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -48,14 +49,15 @@ static const char *TAG = "uvc_demo";
 #define MAX_FRAME_H 960
 #define NUMBER_OF_FRAME_BUFFERS 5
 
-/* Formats tried in order until the camera accepts one */
-static const uvc_host_stream_format_t s_formats[] = {
-    {.h_res = 1280, .v_res = 720, .fps = 30, .format = UVC_VS_FORMAT_MJPEG},
-    {.h_res = 1280, .v_res = 720, .fps = 10, .format = UVC_VS_FORMAT_MJPEG},
-    {.h_res = 800, .v_res = 600, .fps = 30, .format = UVC_VS_FORMAT_MJPEG},
-    {.h_res = 640, .v_res = 480, .fps = 30, .format = UVC_VS_FORMAT_MJPEG},
-    {.h_res = 640, .v_res = 480, .fps = 15, .format = UVC_VS_FORMAT_MJPEG},
-};
+/* Preferred picture size: the largest MJPEG format the camera offers up to this size */
+#define PREFERRED_MAX_W 1280
+#define PREFERRED_MAX_H 720
+
+/* MJPEG formats offered by the connected camera, best first (filled on connection) */
+#define MAX_CANDIDATES 32
+static uvc_host_stream_format_t s_cand[MAX_CANDIDATES];
+static int s_cand_n;
+static SemaphoreHandle_t s_cam_ready;
 
 static esp_lcd_panel_handle_t s_panel;
 static void *s_fb[2];
@@ -228,6 +230,23 @@ static bool frame_callback(const uvc_host_frame_t *frame, void *user_ctx)
     return false; /* processing task returns it */
 }
 
+/* Formats up to PREFERRED_MAX_* first (largest first), then larger ones (smallest first). */
+static int candidate_order(const void *a, const void *b)
+{
+    const uvc_host_stream_format_t *fa = a, *fb = b;
+    bool pa = fa->h_res <= PREFERRED_MAX_W && fa->v_res <= PREFERRED_MAX_H;
+    bool pb = fb->h_res <= PREFERRED_MAX_W && fb->v_res <= PREFERRED_MAX_H;
+    if (pa != pb) {
+        return pa ? -1 : 1;
+    }
+    long area_a = (long)fa->h_res * fa->v_res;
+    long area_b = (long)fb->h_res * fb->v_res;
+    if (area_a == area_b) {
+        return 0;
+    }
+    return pa ? (area_a > area_b ? -1 : 1) : (area_a < area_b ? -1 : 1);
+}
+
 static void driver_event_callback(const uvc_host_driver_event_data_t *event, void *user_ctx)
 {
     if (event->type != UVC_HOST_DRIVER_EVENT_DEVICE_CONNECTED) {
@@ -245,8 +264,29 @@ static void driver_event_callback(const uvc_host_driver_event_data_t *event, voi
                      list[i].h_res, list[i].v_res,
                      list[i].default_interval ? 1e7f / list[i].default_interval : 0.0f);
         }
+        /* Candidates: MJPEG up to the preferred size, largest first, at the camera's default
+         * frame rate; larger formats (up to MAX_FRAME_*) only as a last resort. */
+        int c = 0;
+        for (size_t i = 0; i < n && c < MAX_CANDIDATES; i++) {
+            const uvc_host_frame_info_t *f = &list[i];
+            if (f->format != UVC_VS_FORMAT_MJPEG || f->h_res > MAX_FRAME_W || f->v_res > MAX_FRAME_H) {
+                continue;
+            }
+            s_cand[c++] = (uvc_host_stream_format_t) {
+                .h_res = f->h_res,
+                .v_res = f->v_res,
+                .fps = f->default_interval ? 1e7f / f->default_interval : 0,
+                .format = UVC_VS_FORMAT_MJPEG,
+            };
+        }
+        qsort(s_cand, c, sizeof(s_cand[0]), candidate_order);
+        s_cand_n = c;
+        if (c == 0) {
+            ESP_LOGW(TAG, "Camera offers no MJPEG format up to %dx%d", MAX_FRAME_W, MAX_FRAME_H);
+        }
     }
     free(list);
+    xSemaphoreGive(s_cam_ready);
 }
 
 static void processing_task(void *arg)
@@ -341,6 +381,7 @@ void app_main(void)
 
     s_frame_q = xQueueCreate(NUMBER_OF_FRAME_BUFFERS, sizeof(uvc_host_frame_t *));
     s_disconnected = xSemaphoreCreateBinary();
+    s_cam_ready = xSemaphoreCreateBinary();
     assert(s_frame_q && s_disconnected);
 
     const usb_host_config_t host_cfg = {.skip_phy_setup = false, .intr_flags = ESP_INTR_FLAG_LOWMED};
@@ -358,42 +399,45 @@ void app_main(void)
     xTaskCreatePinnedToCore(processing_task, "frame_proc", 6 * 1024, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "Waiting for a UVC camera on the High-Speed USB port...");
-    size_t fmt = 0;
     while (true) {
-        uvc_host_stream_config_t stream_cfg = {
-            .event_cb = stream_callback,
-            .frame_cb = frame_callback,
-            .usb = {.vid = UVC_HOST_ANY_VID, .pid = UVC_HOST_ANY_PID, .uvc_stream_index = 0},
-            .vs_format = s_formats[fmt],
-            .advanced = {
-                .number_of_frame_buffers = NUMBER_OF_FRAME_BUFFERS,
-                .frame_size = 512 * 1024,
-                .frame_heap_caps = MALLOC_CAP_SPIRAM,
-                .number_of_urbs = 4,
-                .urb_size = 0,
-            },
-        };
-        esp_err_t err = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(5000), &s_stream);
-        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT) {
-            continue; /* no camera yet */
+        /* Wait until a camera is connected and its formats are known */
+        xSemaphoreTake(s_cam_ready, portMAX_DELAY);
+        bool streaming = false;
+        for (int i = 0; i < s_cand_n && !streaming; i++) {
+            const uvc_host_stream_format_t *f = &s_cand[i];
+            uvc_host_stream_config_t stream_cfg = {
+                .event_cb = stream_callback,
+                .frame_cb = frame_callback,
+                .usb = {.vid = UVC_HOST_ANY_VID, .pid = UVC_HOST_ANY_PID, .uvc_stream_index = 0},
+                .vs_format = *f,
+                .advanced = {
+                    .number_of_frame_buffers = NUMBER_OF_FRAME_BUFFERS,
+                    .frame_size = 512 * 1024,
+                    .frame_heap_caps = MALLOC_CAP_SPIRAM,
+                    .number_of_urbs = 4,
+                    .urb_size = 0,
+                },
+            };
+            esp_err_t err = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(5000), &s_stream);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "%ux%u@%.1f MJPEG rejected (%s), trying the next format", f->h_res, f->v_res, f->fps,
+                         esp_err_to_name(err));
+                continue;
+            }
+            err = uvc_host_stream_start(s_stream);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "%ux%u@%.1f MJPEG did not start (%s), trying the next format", f->h_res, f->v_res, f->fps,
+                         esp_err_to_name(err));
+                uvc_host_stream_close(s_stream);
+                continue;
+            }
+            ESP_LOGI(TAG, "Stream opened: %ux%u@%.1f MJPEG", f->h_res, f->v_res, f->fps);
+            streaming = true;
         }
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "%ux%u@%.0f MJPEG rejected (%s), trying next format", s_formats[fmt].h_res,
-                     s_formats[fmt].v_res, s_formats[fmt].fps, esp_err_to_name(err));
-            fmt = (fmt + 1) % (sizeof(s_formats) / sizeof(s_formats[0]));
-            vTaskDelay(pdMS_TO_TICKS(200));
-            continue;
-        }
-        ESP_LOGI(TAG, "Stream opened: %ux%u@%.0f MJPEG", s_formats[fmt].h_res, s_formats[fmt].v_res,
-                 s_formats[fmt].fps);
-        err = uvc_host_stream_start(s_stream);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Stream start failed (%s), trying next format", esp_err_to_name(err));
-            uvc_host_stream_close(s_stream);
-            fmt = (fmt + 1) % (sizeof(s_formats) / sizeof(s_formats[0]));
+        if (!streaming) {
+            ESP_LOGE(TAG, "No usable MJPEG format - reconnect the camera");
             continue;
         }
         xSemaphoreTake(s_disconnected, portMAX_DELAY);
-        fmt = 0;
     }
 }
