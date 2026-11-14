@@ -1,0 +1,5 @@
+dependencies:
+  idf: ">=6.1"
+  espressif/esp_lcd_jd9365: "2.0.2"
+  espressif/usb: "*"
+  espressif/usb_host_uvc: "^2.5.1"
