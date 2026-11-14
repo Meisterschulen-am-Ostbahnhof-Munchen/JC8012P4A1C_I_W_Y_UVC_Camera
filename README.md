@@ -81,10 +81,21 @@ die Differenz steht als „skipped (late)“ im Log. Vereinzelte `uvc-isoc: miss
 | Logitech C270 | isochron | 1280x720 MJPEG | 16–20 fps |
 | UGREEN HDMI-zu-USB-Grabber mit AHD-Kamera (720p25) | Bulk | 1280x720 MJPEG @ 30 (angeboten 60/50/30) | 20 fps |
 | UGREEN HDMI-zu-USB-Grabber mit PAL-Kamera über PAL-zu-HDMI-Wandler | Bulk | 1280x720 MJPEG @ 30 | 20 fps |
-| USB-Kameramodul mit ESP32, Platine „ESP32-USB-14A“ | – | 1280x720 MJPEG @ 15 | 14,6 fps (volle Kamerarate) |
+| Kameramodul „ESP32 CAM“, Platine „ESP32-USB-14A“, USB `349c:3307` | Bulk, Full Speed | 1280x720 MJPEG @ 15 | 14,6 fps (volle Kamerarate) |
 
-Das ESP32-Kameramodul bietet MJPEG 1280x720@15, 800x480@20, 640x480@25 und 480x320@25 an.
-Selten kommt von ihm ein fehlerhaftes JPEG; der Rahmen wird übersprungen.
+Zum Kameramodul „ESP32 CAM“:
+
+- **Kein Espressif-Chip**, trotz Aufdruck: ein QFN-32 ohne Espressif-Logo und mit fremder
+  USB-Kennung (`349c:3307`, „Generic / HD video“). Espressif-Chips, die als USB-Webcam
+  arbeiten können (ESP32-S2/S3), haben 56 Anschlüsse. Die Firmware ist nicht änderbar.
+- **Full Speed (12 Mbit/s):** Mehr als 1280x720@15 geht nicht. Angeboten werden MJPEG
+  1280x720@15, 800x480@20, 640x480@25 und 480x320@25.
+- Das Modul hat außerdem **Mikrofon und Lautsprecher-Ausgang** (USB Audio Class 1, mono,
+  16 Bit, 16 kHz); die Demo nutzt nur das Bild.
+- **USB-C ohne CC-Widerstände:** An einem normgerechten USB-C-Port bekommt das Modul keine
+  5 V und wird gar nicht erkannt. Es läuft an USB-A (z. B. mit A-auf-C-Adapter) und am
+  JC8012, dessen USB-C-Buchse die 5 V fest anlegt.
+- Selten kommt ein fehlerhaftes JPEG; der Rahmen wird übersprungen.
 
 ## AHD-Kamera über HDMI-Grabber
 
